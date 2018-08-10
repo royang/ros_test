@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "C:\\Program Files (x86)\\Arduino\\hardware\\tools\\avr\\avr\\include\\**",
+
+                "C:\\Users\\zdh\\Documents\\Arduino\\libraries\\**",
+                "C:\\Users\\zdh\\Documents\\Arduino\\libraries\\PID\\**",
+
+                "C:\\Users\\zdh\\Documents\\Arduino\\hardware\\Arduino_STM32\\**",
+                "C:\\Users\\zdh\\Documents\\Arduino\\hardware\\Arduino_STM32\\STM32F1\\cores\\maple\\**"
+            ],
+            "defines": [
+                "SERIAL_USB"
+            ],
+            "intelliSenseMode": "msvc-x64",
+            "compilerPath": "C:\\Program Files\\LLVM\\bin\\clang.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
