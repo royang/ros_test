@@ -1,122 +1,110 @@
 #include "Arduino.h"
 #include "HardwareTimer.h"
-#include "PID_v1.h"
+
 #include "ros.h"
 #include "rosserial_arduino/Adc.h"
 #include "std_msgs/String.h"
 #include "geometry_msgs/Vector3.h"
+#include "geometry_msgs/Twist.h"
 #include "string.h"
 
-#define PPR2 1024
-#define PPR  65535
+#include "global.h"
+#include "odom.h"
 
-void messageCb(const geometry_msgs::Vector3 &ctlMsg);
+void pidSetCb(const geometry_msgs::Vector3 &ctlMsg);
 void setPointCb(const std_msgs::String &val);
+void cmdVelCb(const geometry_msgs::Twist &twist);
 
-double Setpoint=30, Input , Output;
-uint16_t LastEncoder=0, CurrentEncoder=0;
+moveUnit motorL(MOTOR_L_TIMER, MOTOR_L_FORWARD_PIN, MOTOR_L_BACKWARD_PIN, ENCODER_L_TIMER, 5, 1, 0, 30);
+moveUnit motorR(MOTOR_R_TIMER, MOTOR_R_FORWARD_PIN, MOTOR_R_BACKWARD_PIN, ENCODER_R_TIMER, 5, 1, 0, 30);
 
-HardwareTimer timer_3(3);
-HardwareTimer timer_2(2);
-
-PID myPID(&Input, &Output, &Setpoint, 5, 1, 0.1, DIRECT);
-
-geometry_msgs::Vector3 rqt_var;
+geometry_msgs::Vector3 displayValue;
 
 ros::NodeHandle nh;
-ros::Publisher pub("pid", &rqt_var);
+ros::Publisher pubValue("pubValueDisplay", &displayValue);
 
 std_msgs::String setPointVal;
-ros::Subscriber<std_msgs::String> setPointSub("/setPntSub", &setPointCb);
-
-ros::Subscriber<geometry_msgs::Vector3> sub("/pidCtrl", &messageCb);
+ros::Subscriber<std_msgs::String> subSetPoint("/subSetPoint", &setPointCb);
+ros::Subscriber<geometry_msgs::Vector3> subPIDSet("/subPIDSet", &pidSetCb);
+ros::Subscriber<geometry_msgs::Twist> subTwist("/turtle1/cmd_vel", &cmdVelCb);
 
 char buf[64]="Arduino init ok";
+uint32_t moveTime=0;
+uint8_t twistSetFlag=0;
 
 void setPointCb(const std_msgs::String &val){
-  Setpoint = atoi(val.data);
-  memset(buf, 0, sizeof(buf));
+  int setPoint = atoi(val.data);
+  motorL.setSetPoint(setPoint);
+  motorR.setSetPoint(setPoint);
 
-  snprintf(buf, sizeof(buf), "new setPoint：%d", (int)Setpoint);
-  
-  nh.loginfo(val.data);
+  memset(buf, 0, sizeof(buf));
+  snprintf(buf, sizeof(buf), "new setPoint：%d", setPoint);
   nh.loginfo(buf);
+  nh.spinOnce();
 }
 
-void messageCb(const geometry_msgs::Vector3 &ctlMsg){
-  digitalWrite(32, !digitalRead(32));
-
+void pidSetCb(const geometry_msgs::Vector3 &ctlMsg){
   memset(buf, 0, sizeof(buf));
   snprintf(buf, sizeof(buf), "kp:%.2f ki:%.2f kd:%.2f", ctlMsg.x, ctlMsg.y, ctlMsg.z);
   nh.loginfo(buf);
   nh.spinOnce();
 
-  timer_2.pause();
-  myPID.SetTunings(ctlMsg.x, ctlMsg.y, ctlMsg.z);
-  timer_2.resume();
+  motorL.moveUnitSetTuning(ctlMsg.x, ctlMsg.y, ctlMsg.z);
+  motorR.moveUnitSetTuning(ctlMsg.x, ctlMsg.y, ctlMsg.z);
+}
+
+void cmdVelCb(const geometry_msgs::Twist &twist){
+  double tmp=0;
+
+  moveTime = millis();
+  twistSetFlag = 1;
+
+  if(twist.linear.x){
+    tmp = SPEED_K * twist.linear.x;
+    motorL.setSetPoint(tmp);
+    motorR.setSetPoint(tmp);
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "linear speed %lf", tmp);
+    nh.loginfo(buf);
+  }else if(twist.angular.z){
+    tmp = SPEED_K * twist.angular.z * WHEEL_RADIUS_M;
+    motorL.setSetPoint(tmp);
+    motorR.setSetPoint(-tmp);   
+
+    memset(buf, 0, sizeof(buf));
+    snprintf(buf, sizeof(buf), "angular speed %lf", tmp);
+    nh.loginfo(buf);
+  }
 }
 
 void setup() {
   nh.initNode();
-  nh.advertise(pub);
-  nh.subscribe(sub);
-  nh.subscribe(setPointSub);
-  
-  pinMode(32, OUTPUT);
-  pinMode(3, OUTPUT);
-  pinMode(2, PWM);
-
-  timer_3.setMode(0, TIMER_ENCODER); 
-  timer_3.pause(); 
-  timer_3.setPrescaleFactor(1); 
-  timer_3.setOverflow(PPR);    
-  timer_3.setCount(0);         
-  timer_3.setEdgeCounting(TIMER_SMCR_SMS_ENCODER3); 
-  timer_3.resume();                
-
-  timer_2.setMode(2, TIMER_PWM);
-  timer_2.setPrescaleFactor(71);
-  timer_2.setOverflow(PPR2);
-  timer_2.setCount(0);
-
-
-  pwmWrite(2, 0); 
-
-  myPID.SetOutputLimits(0, PPR2);
-  myPID.SetMode(AUTOMATIC);
-
-  delay(1000);
-
-  timer_2.resume();
+  nh.advertise(pubValue);
+  nh.subscribe(subPIDSet);
+  nh.subscribe(subSetPoint);
+  nh.subscribe(subTwist);
 }
 
 unsigned long interval=0; 
 
 void loop() {
-  if (millis() - interval >= 30) { 
-     interval = millis();
-     
-     CurrentEncoder = timer_3.getCount();
-     if(CurrentEncoder < LastEncoder){
-        Input = PPR - LastEncoder + CurrentEncoder;
-     }else{
-        Input = CurrentEncoder - LastEncoder;
-     }
-    //  if(Input > 100){
-      //  digitalWrite(32, !digitalRead(32));
-      //  snprintf(buf, sizeof(buf), "cur:%d last:%d Input:%d\n", CurrentEncoder, LastEncoder, Input);
-      //  nh.loginfo(buf);
-    //  }
-     LastEncoder = CurrentEncoder;
+  if (millis() - interval >= SAMPLE_TIME) { 
+    interval = millis();
 
-     myPID.Compute();
-     
-     pwmWrite(2, Output);
+    if((twistSetFlag) && (millis() - moveTime > STEP_TIME)){
+      twistSetFlag = 0;
+      motorL.setSetPoint(0);
+      motorR.setSetPoint(0);
+    }
+    
+    motorL.moveUnitCompute();
+    motorR.moveUnitCompute();
 
-    rqt_var.x = Input*30;
-    rqt_var.y = Output;
-    rqt_var.z = Setpoint*30;
-    pub.publish(&rqt_var);
+    displayValue.x = motorL.getInput();
+    displayValue.y = motorR.getInput();
+    displayValue.z = motorL.getSetPoint();
+    pubValue.publish(&displayValue);
     nh.spinOnce();
   }
 }
